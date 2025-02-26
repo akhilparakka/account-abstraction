@@ -9,17 +9,52 @@ import {MessageHashUtils} from "openzeppelin-contracts/contracts/utils/cryptogra
 
 contract SendPackedUserOp is Script {
     using MessageHashUtils for bytes32;
-    EntryPoint public entryPoint;
+    IEntryPoint public entryPoint;
 
-    function run() public {
-        vm.startBroadcast();
-        entryPoint = new EntryPoint();
-        vm.stopBroadcast();
+    // Constructor accepting an existing EntryPoint address
+    constructor(address _entryPoint) {
+        entryPoint = IEntryPoint(_entryPoint);
     }
 
+    // Deploy a new EntryPoint if needed
+    function deployEntryPoint() public returns (EntryPoint) {
+        vm.startBroadcast();
+        EntryPoint newEntryPoint = new EntryPoint();
+        entryPoint = newEntryPoint;
+        vm.stopBroadcast();
+        return newEntryPoint;
+    }
+
+    // Generate a signed UserOperation using a private key
     function generateSignedUserOperation(
         bytes memory callData,
-        address sender
+        address sender,
+        uint256 privateKey
+    ) public view returns (PackedUserOperation memory) {
+        // Generate Unsigned Data
+        uint256 nonce = vm.getNonce(sender) - 1;
+        PackedUserOperation memory userOp = _generateUnsignedUserOperation(
+            callData,
+            sender,
+            nonce
+        );
+
+        // Generate Hash
+        bytes32 userOpHash = entryPoint.getUserOpHash(userOp);
+        bytes32 digest = userOpHash.toEthSignedMessageHash();
+
+        // Sign The data
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, digest);
+        userOp.signature = abi.encodePacked(r, s, v);
+
+        return userOp;
+    }
+
+    // Generate a signed UserOperation using a Foundry address
+    function generateSignedUserOperation(
+        bytes memory callData,
+        address sender,
+        address signer
     ) public view returns (PackedUserOperation memory) {
         // Generate Unsigned Data
         uint256 nonce = vm.getNonce(sender);
@@ -33,22 +68,26 @@ contract SendPackedUserOp is Script {
         bytes32 userOpHash = entryPoint.getUserOpHash(userOp);
         bytes32 digest = userOpHash.toEthSignedMessageHash();
 
-        // Sign The data
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(sender, digest);
+        // Sign The data using Foundry's deterministic private key for address
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(
+            uint256(keccak256(abi.encodePacked(signer))),
+            digest
+        );
         userOp.signature = abi.encodePacked(r, s, v);
 
         return userOp;
     }
 
+    // Create an unsigned UserOperation
     function _generateUnsignedUserOperation(
         bytes memory callData,
         address sender,
         uint256 nonce
     ) internal pure returns (PackedUserOperation memory) {
-        uint128 verifcationGasLimit = 16777216;
-        uint128 callGasLimit = verifcationGasLimit;
-        uint128 maxPriorityFeePerGas = 256;
-        uint128 maxFeePerGas = maxPriorityFeePerGas;
+        uint128 verifcationGasLimit = 1000000;
+        uint128 callGasLimit = 1000000;
+        uint128 maxPriorityFeePerGas = 3 gwei;
+        uint128 maxFeePerGas = 6 gwei;
 
         return
             PackedUserOperation({
@@ -68,12 +107,3 @@ contract SendPackedUserOp is Script {
             });
     }
 }
-// address sender;
-// uint256 nonce;
-// bytes initCode;
-// bytes callData;
-// bytes32 accountGasLimits;
-// uint256 preVerificationGas;
-// bytes32 gasFees;
-// bytes paymasterAndData;
-// bytes signature;
